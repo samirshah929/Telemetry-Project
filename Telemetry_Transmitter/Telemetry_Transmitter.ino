@@ -357,7 +357,7 @@ dataFile = SD.open("myfile.txt", FILE_WRITE);
     if(GPS_RECORD == 1){
       dataFile.print(flat, 6);
       dataFile.print(",");
-      dataFile.print(flat, 6);
+      dataFile.print(flon, 6);
       dataFile.print(",");
     }
     if(ACCEL_RECORD == 1){
@@ -442,7 +442,7 @@ static void Record_Header(){
       if(GPS_RECORD == 1){
       Serial.print(flat, 6);
       Serial.print(",");
-      Serial.print(flat, 6);
+      Serial.print(flon, 6);
       Serial.print(",");
       }
       if(ACCEL_RECORD == 1){
