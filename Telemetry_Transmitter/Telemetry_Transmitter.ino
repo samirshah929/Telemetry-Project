@@ -1,53 +1,72 @@
 #include <SoftwareSerial.h>
-#include "MPU9250.h" //library for MPU9250 9-axis IMU (accelerometer, gyroscope, magnetometer)
-#include <SPI.h>  //REMOVE IF ALREADY DEFINED ERROR COMES UP (might be included already by another library)
+//#include <ArduinoSTL.h>
+#include "MPU9250.h" //library for MPU9250 9-axis IMU
+                     //(accelerometer, gyroscope, magnetometer)
+#include <SPI.h>     //REMOVE IF ALREADY DEFINED ERROR COMES UP
+                     //(might be included already by another library)
 #include <SD.h>
 #include <TinyGPS.h>
-#include <MadgwickAHRS.h>  //make sure library is installed in arduino IDE (go to install library and search for madgwick)
+#include <MadgwickAHRS.h>  //make sure library is installed in arduino IDE
+                           //(go to install library and search for madgwick)
 
-#include <Wire.h> // i2c
-#include <MS5611.h> // library for MS5611 (barometer) module (i2c)
+#include <Wire.h>    // i2c
+#include <MS5611.h>  // library for MS5611 (barometer) module (i2c)
 /*
  * Wire Library
  */
 //FLAGS FOR WHAT TO SEND/RECORD (1 = SEND/RECORD, 0 = DON'T SEND/RECORD)
-#define GPS_SEND 0
-#define ACCEL_SEND 0
-#define GYRO_SEND 0
-#define MAG_SEND 0
-#define ORIENTATION_SEND 0
-#define ALTITUDE_SEND 0
-#define TEMPERATURE_SEND 0
+#define GPS_SEND            1
+#define ACCEL_SEND          0
+#define GYRO_SEND           0
+#define MAG_SEND            0
+#define ORIENTATION_SEND    1
+#define ALTITUDE_SEND       0
+#define TEMPERATURE_SEND    0
+#define BATTERY_SEND        0
 
-#define GPS_RECORD 0
-#define ACCEL_RECORD 0
-#define GYRO_RECORD 0
-#define MAG_RECORD 0
-#define ORIENTATION_RECORD 0
-#define ALTITUDE_RECORD 0
-#define TEMPERATURE_RECORD 0
+#define GPS_RECORD          1
+#define ACCEL_RECORD        0
+#define GYRO_RECORD         0
+#define MAG_RECORD          0
+#define ORIENTATION_RECORD  1
+#define ALTITUDE_RECORD     0
+#define TEMPERATURE_RECORD  0
+#define BATTERY_RECORD      0
+
+#define DEBUG_MODE          1
 /******GPS******/
 static const int GPSRxPin = 7, GPSTxPin = 8; // if this shit doenst work, switch them
 static const uint32_t GPSBaud = 9600;
+TinyGPS gps;  //GPS Object
+SoftwareSerial gps_mod(GPSRxPin, GPSTxPin);
+
+
 
 /******Sensor Block******/
-static const int XbeeRxPin = 0, XbeeTxPin = 1; // if this shit doenst work, switch them
-static const uint32_t xbeeBaud = 9600;
+static const int Sensor_SelPin = 20;   //Sensor Block Select Pin
 
 /******Barometer******/
+static const int Barometer_SelPin = 21;   //Barometer Select Pin
+
+/******SD Card Module******/
+static const int SD_SelPin = 22;   //SD Card Module Select Pin
+
+/******EXTERNAL CONNECTOR******/
+static const int EXT_SelPin = 23;  //EXTERNAL CONNECTOR Select Pin
+
+/******Battery Voltage******/
+static const int ADC_Pin = 16;  //EXTERNAL CONNECTOR Select Pin
+//NOTE: DO NOT TOUCH PIN 15 !!!!!!!!
 
 /******Xbee Pro S3B******/
-
-
-
-TinyGPS gps;
-SoftwareSerial gps_mod(GPSRxPin, GPSTxPin);
+static const int XbeeRxPin = 0, XbeeTxPin = 1; // if this shit doenst work, switch them
+static const uint32_t xbeeBaud = 9600;
 SoftwareSerial xbee(XbeeRxPin, XbeeTxPin);
 
+//----------------------------------------------------------------------------//
 /*
  * GPS Functions
  */
-
 static void smartdelay(unsigned long ms);
 static void print_float(float val, float invalid, int len, int prec);
 static void print_int(unsigned long val, unsigned long invalid, int len);
@@ -57,12 +76,34 @@ static void print_str(const char *str, int len);
 /*
  * Sensors Functions
  */
-
-MPU9250 IMU(SPI,10);
+MS5611 ms5611;
+double referencePressure;
+MPU9250 IMU(SPI,Sensor_SelPin);
 int status;
 Madgwick filter;
 
+/*
+ * Global Variables
+ */
+ //GPS
+float flat, flon;
+unsigned long age, date, time, chars = 0;
+unsigned short sentences = 0, failed = 0;
+static const double LONDON_LAT = 51.508131, LONDON_LON = -0.128002;
+//Sensors
+float ax, ay, az;
+float gx, gy, gz;
+float mx, my, mz;
+float pitch, roll, yaw;
+float voltage;
+float barom;
+float temp;
+float realPressure;
 
+File dataFile;
+//----------------------------------------------------------------------------//
+//*****************************   MAIN Setup   *******************************//
+//----------------------------------------------------------------------------//
 void setup()
 {
 /*  Serial Begin  */
@@ -83,37 +124,49 @@ void setup()
     Serial.println("Check IMU wiring or try cycling power");
     Serial.print("Status: ");
     Serial.println(status);
-    while(1) {}
+//    while(1) {}
   }
+  Serial.println("Initialize MS5611 Sensor");
+  Record_Header();
+  Serial_Header();
 
+  if(ALTITUDE_SEND == 1 || ALTITUDE_RECORD == 1){
+    while(!ms5611.begin())
+    {
+      Serial.println("Could not find a valid MS5611 sensor, check wiring!");
+      delay(500);
+    }
+
+  // Get reference pressure for relative altitude
+
+    referencePressure = ms5611.readPressure();
 }
 
+
+
+}
+//----------------------------------------------------------------------------//
+//*****************************   MAIN LOOP   ********************************//
+//----------------------------------------------------------------------------//
 void loop()
 {
-  // read the sensor
-  IMU.readSensor();
+  Data_Retrieve();
 
-  float flat, flon;
-  unsigned long age, date, time, chars = 0;
-  unsigned short sentences = 0, failed = 0;
-  static const double LONDON_LAT = 51.508131, LONDON_LON = -0.128002;
-
-
-  gps.f_get_position(&flat, &flon, &age);
-
-    Serial.print("Lat:");
-    Serial.print("\t");
-    Serial.println(flat, 6);
-
-    Serial.print("Lon:");
-    Serial.print("\t");
-    Serial.println(flon, 6);
-    Serial.println();
-    SEND(flat, 8);
-    SEND(flon, 9);
-
-  smartdelay(1000); //part of gps functionality
+  if(GPS_SEND == 1 || ACCEL_SEND == 1 || GYRO_SEND == 1 || MAG_SEND == 1 || ORIENTATION_SEND == 1 || ALTITUDE_SEND == 1 || TEMPERATURE_SEND == 1 || BATTERY_SEND == 1){
+    Send_Data();
+  }
+  if(GPS_RECORD == 1 || ACCEL_RECORD == 1 || GYRO_RECORD == 1 || MAG_RECORD == 1 || ORIENTATION_RECORD == 1 || ALTITUDE_RECORD == 1 || TEMPERATURE_RECORD == 1 || BATTERY_RECORD == 1){
+    Record_Data();
+  }
+  if(DEBUG_MODE == 1){
+    Serial_Data();
+  }
+    delay(200);
 }
+
+//----------------------------------------------------------------------------//
+//*****************************   Functions   ********************************//
+//----------------------------------------------------------------------------//
 
 static void smartdelay(unsigned long ms)
 {
@@ -250,3 +303,286 @@ static void gps_print_header()
   Serial.println("          (deg)     (deg)      Age                      Age  (m)    --- from GPS ----  ---- to London  ----  RX    RX        Fail");
   Serial.println("-------------------------------------------------------------------------------------------------------------------------------------");
 }
+/*
+ *  Main LUT for Main Loop
+ */
+static void Send_Data()
+{
+  if(GPS_SEND == 1){
+    SEND(flat,  8);
+    SEND(flon,  9);
+    delay(50);
+  }
+  if(ACCEL_SEND == 1){
+    SEND(ax,  0);
+    SEND(ay,  1);
+    SEND(az,  2);
+    delay(50);
+  }
+  if(GYRO_SEND == 1){
+    SEND(gx,  10);
+    SEND(gy,  11);
+    SEND(gz,  12);
+    delay(50);
+  }
+  if(MAG_SEND == 1){
+    SEND(mx,  5);
+    SEND(my,  6);
+    SEND(mz,  7);
+    delay(50);
+  }
+  if(ORIENTATION_SEND == 1){
+    SEND(pitch, 14);
+    SEND(roll,  15);
+    SEND(yaw,   16);
+    delay(50);
+  }
+  if(ALTITUDE_SEND == 1){
+    SEND(barom, 3);
+    delay(50);
+  }
+  if(TEMPERATURE_SEND == 1){
+    SEND(temp, 13);
+    delay(50);
+  }
+  if(BATTERY_SEND == 1){
+    SEND(voltage, 4);
+    delay(50);
+  }
+
+}
+
+static void Record_Data(){
+dataFile = SD.open("myfile.txt", FILE_WRITE);
+    if(GPS_RECORD == 1){
+      dataFile.print(flat, 6);
+      dataFile.print(",");
+      dataFile.print(flat, 6);
+      dataFile.print(",");
+    }
+    if(ACCEL_RECORD == 1){
+      dataFile.print(ax, 6);
+      dataFile.print(",");
+      dataFile.print(ay, 6);
+      dataFile.print(",");
+      dataFile.print(az, 6);
+      dataFile.print(",");
+    }
+    if(GYRO_RECORD == 1){
+      dataFile.print(gx, 6);
+      dataFile.print(",");
+      dataFile.print(gy, 6);
+      dataFile.print(",");
+      dataFile.print(gz, 6);
+      dataFile.print(",");
+    }
+    if(MAG_RECORD == 1){
+      dataFile.print(mx, 6);
+      dataFile.print(",");
+      dataFile.print(my, 6);
+      dataFile.print(",");
+      dataFile.print(mz, 6);
+      dataFile.print(",");
+    }
+    if(ORIENTATION_RECORD == 1){
+      dataFile.print(pitch, 6);
+      dataFile.print(",");
+      dataFile.print(roll, 6);
+      dataFile.print(",");
+      dataFile.print(yaw, 6);
+      dataFile.print(",");
+    }
+    if(ALTITUDE_RECORD == 1){
+      dataFile.print(barom, 6);
+      dataFile.print(",");
+    }
+    if(TEMPERATURE_RECORD == 1){
+      dataFile.print(temp, 6);
+      dataFile.print(",");
+    }
+    if(BATTERY_RECORD == 1){
+      dataFile.print(voltage, 6);
+      dataFile.print(",");
+    }
+    dataFile.println();
+    dataFile.close();
+  }
+static void Record_Header(){
+    dataFile = SD.open("myfile.txt", FILE_WRITE);
+
+    if(GPS_RECORD == 1){
+      dataFile.print("Lat:  ,Lon:  ,");
+    }
+    if(ACCEL_RECORD == 1){
+      dataFile.print("Ax :  ,Ay :  ,Az :  ,");
+    }
+    if(GYRO_RECORD == 1){
+      dataFile.print("Gx :  ,Gy :  ,Gz :  ,");
+    }
+    if(MAG_RECORD == 1){
+      dataFile.print("Mx :  ,My :  ,Mz :  ,");
+    }
+    if(ORIENTATION_RECORD == 1){
+      dataFile.print("Pitch:,Roll: ,Yaw:  ,");
+    }
+    if(ALTITUDE_RECORD == 1){
+      dataFile.print("Barom:,");
+    }
+    if(TEMPERATURE_RECORD == 1){
+      dataFile.print("Temp: ,");
+    }
+    if(BATTERY_RECORD == 1){
+      dataFile.print("Volt: ,");
+    }
+    dataFile.println();
+    dataFile.println("_______________________________________________________________________________________________________________________");
+    dataFile.close();
+  }
+  static void Serial_Data(){
+      if(GPS_RECORD == 1){
+      Serial.print(flat, 6);
+      Serial.print(",");
+      Serial.print(flat, 6);
+      Serial.print(",");
+      }
+      if(ACCEL_RECORD == 1){
+        Serial.print(ax, 6);
+        Serial.print(",");
+        Serial.print(ay, 6);
+        Serial.print(",");
+        Serial.print(az, 6);
+        Serial.print(",");
+      }
+      if(GYRO_RECORD == 1){
+        Serial.print(gx, 6);
+        Serial.print(",");
+        Serial.print(gy, 6);
+        Serial.print(",");
+        Serial.print(gz, 6);
+        Serial.print(",");
+      }
+      if(MAG_RECORD == 1){
+        Serial.print(gx, 6);
+        Serial.print(",");
+        Serial.print(gy, 6);
+        Serial.print(",");
+        Serial.print(gz, 6);
+        Serial.print(",");
+      }
+      if(ORIENTATION_RECORD == 1){
+        Serial.print(pitch, 6);
+        Serial.print(",");
+        Serial.print(roll, 6);
+        Serial.print(",");
+        Serial.print(yaw, 6);
+        Serial.print(",");
+      }
+      if(ALTITUDE_RECORD == 1){
+        Serial.print(barom, 6);
+        Serial.print(",");
+      }
+      if(TEMPERATURE_RECORD == 1){
+        Serial.print(temp, 6);
+        Serial.print(",");
+      }
+      if(BATTERY_RECORD == 1){
+        Serial.print(voltage, 6);
+        // Serial.print(",");
+      }
+      Serial.println();
+    }
+  static void Serial_Header(){
+
+      if(GPS_RECORD == 1){
+        Serial.print("Lat:  ,Lon:  ,");
+      }
+      if(ACCEL_RECORD == 1){
+        Serial.print("Ax :  ,Ay :  ,Az :  ,");
+      }
+      if(GYRO_RECORD == 1){
+        Serial.print("Gx :  ,Gy :  ,Gz :  ,");
+      }
+      if(MAG_RECORD == 1){
+        Serial.print("Mx :  ,My :  ,Mz :  ,");
+      }
+      if(ORIENTATION_RECORD == 1){
+        Serial.print("Pitch:,Roll: ,Yaw:  ,");
+      }
+      if(ALTITUDE_RECORD == 1){
+        Serial.print("Barom:,");
+      }
+      if(TEMPERATURE_RECORD == 1){
+        Serial.print("Temp: ,");
+      }
+      if(BATTERY_RECORD == 1){
+        Serial.print("Volt: ,");
+      }
+      Serial.println();
+      Serial.println("_______________________________________________________________________________________________________________________");
+
+    }
+    static void Data_Retrieve(){
+
+        if(GPS_RECORD == 1 || GPS_SEND == 1){
+          gps.f_get_position(&flat, &flon, &age);
+        }
+        if(ACCEL_RECORD == 1 || ACCEL_SEND == 1 || GYRO_RECORD == 1 || GYRO_SEND == 1 || MAG_RECORD == 1 || MAG_SEND == 1 || ORIENTATION_RECORD == 1 || ORIENTATION_SEND == 1 || ALTITUDE_RECORD == 1 || ALTITUDE_SEND == 1 || TEMPERATURE_RECORD == 1 || TEMPERATURE_SEND == 1){
+          IMU.readSensor();
+
+        }
+        if(ACCEL_RECORD == 1 || ACCEL_SEND == 1 || GYRO_RECORD == 1 || GYRO_SEND == 1 || MAG_RECORD == 1 || MAG_SEND == 1){
+          ax = IMU.getAccelX_mss()/9.8;
+          ay = IMU.getAccelY_mss()/9.8;
+          az = IMU.getAccelZ_mss()/9.8;
+
+          gx = IMU.getGyroX_rads()*114.59;
+          gy = IMU.getGyroY_rads()*114.59;
+          gz = IMU.getGyroZ_rads()*114.59;
+
+          mx = IMU.getMagX_uT();
+          my = IMU.getMagY_uT();
+          mz = IMU.getMagZ_uT();
+        }
+        if((ACCEL_RECORD == 1 || ACCEL_SEND == 1 || GYRO_RECORD == 1 || GYRO_SEND == 1 || MAG_RECORD == 1 || MAG_SEND == 1)&&(ORIENTATION_RECORD == 1 || ORIENTATION_SEND == 1)){
+          filter.updateIMU(gx, gy, gz, ax, ay, az);
+          roll = filter.getRoll();
+          pitch = filter.getPitch();
+          yaw = filter.getYaw();
+        }
+        if((ACCEL_RECORD != 1 && ACCEL_SEND != 1 && GYRO_RECORD != 1 && GYRO_SEND != 1 && MAG_RECORD != 1 && MAG_SEND && 1) && (ORIENTATION_RECORD == 1 || ORIENTATION_SEND == 1)){
+          ax = IMU.getAccelX_mss()/9.8;
+          ay = IMU.getAccelY_mss()/9.8;
+          az = IMU.getAccelZ_mss()/9.8;
+
+          gx = IMU.getGyroX_rads()*114.59;
+          gy = IMU.getGyroY_rads()*114.59;
+          gz = IMU.getGyroZ_rads()*114.59;
+
+          mx = IMU.getMagX_uT();
+          my = IMU.getMagY_uT();
+          mz = IMU.getMagZ_uT();
+
+          temp = IMU.getTemperature_C();
+          filter.updateIMU(gx, gy, gz, ax, ay, az);
+          roll = filter.getRoll();
+          pitch = filter.getPitch();
+          yaw = filter.getYaw();
+          if(ALTITUDE_SEND == 1 || ALTITUDE_RECORD == 1){
+              long realPressure = ms5611.readPressure();
+          }
+        }
+        if(ALTITUDE_RECORD == 1 || ALTITUDE_SEND == 1){
+          barom = ms5611.getAltitude(realPressure);
+        }
+        if(TEMPERATURE_RECORD == 1 || TEMPERATURE_SEND == 1){
+          temp = IMU.getTemperature_C();
+        }
+        if(BATTERY_RECORD == 1){
+          voltage = digitalRead(ADC_Pin);
+          // read the input on analog pin 0:
+          int sensorValue = analogRead(A0);
+          // Convert the ADC reading (which goes from 0 - 1023) to a voltage reading (0 - 3.3V):
+          voltage = sensorValue * (3.3 / 1023.0);
+
+        }
+      }
